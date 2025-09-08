@@ -53,6 +53,7 @@ export default async function BaseLayout({ children }: RootLayoutProps) {
                         <p className="font-medium text-sm">{session.user.name || 'User'}</p>
                         <p className="text-gray-500 text-xs truncate">{session.user.email}</p>
                       </div>
+                      <Link href="/dashboard" className="block hover:bg-gray-100 px-4 py-2 text-gray-700 text-sm">Dashboard</Link>
                       <Link href="/account" className="block hover:bg-gray-100 px-4 py-2 text-gray-700 text-sm">Account</Link>
                       <div className="border-t">
                         <Link href="/logout" className="block hover:bg-gray-100 px-4 py-2 text-gray-700 text-sm">Sign out</Link>
