@@ -64,7 +64,7 @@ export const RegisterForm = () => {
 
   return (
     <Form {...form}>
-      <form onSubmit={form.handleSubmit(handleSubmit)}>
+      <form onSubmit={form.handleSubmit(async (data) => await handleSubmit(data as any))}>
         <div className="grid space-y-6">
           <FormField
             control={form.control}
