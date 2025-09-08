@@ -9,6 +9,10 @@ interface AdminLayoutProps {
 }
 export default async function AdminLayout({ children }: AdminLayoutProps) {
   const session = await auth.api.getSession({ headers: await headers() });
+  if (!session) {
+    // Redirect to login or handle unauthorized access
+    return null;
+  }
   const cookieStore = await cookies();
   const defaultOpen = cookieStore.get('sidebar:state')?.value === 'true';
   return (
