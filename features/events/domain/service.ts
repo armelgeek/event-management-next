@@ -1,6 +1,6 @@
 import { db } from '@/drizzle/db';
-import { events, participationRequests, users } from '@/drizzle/schema';
-import { and, eq, like, gte, lte, sql, desc, asc } from 'drizzle-orm';
+import { events, participationRequests, users, ticketTypes } from '@/drizzle/schema';
+import { and, eq, like, gte, lte, sql, desc, asc, count } from 'drizzle-orm';
 import type {
   CreateEventInput,
   UpdateEventInput,
@@ -15,13 +15,14 @@ import type {
 
 export class EventsService {
   // Event CRUD operations
-  async createEvent(data: CreateEventInput & { organizerId: string }): Promise<Event> {
+  async createEvent(data: Omit<Event, 'id' | 'currentParticipants' | 'createdAt' | 'updatedAt' | 'organizer' | 'ticketTypes'>): Promise<Event> {
     const [event] = await db
       .insert(events)
       .values({
         ...data,
         date: new Date(data.date),
-        organizerId: data.organizerId,
+        endDate: data.endDate ? new Date(data.endDate) : null,
+        publishedAt: data.status === 'published' ? new Date() : null,
       })
       .returning();
 
@@ -34,14 +35,35 @@ export class EventsService {
         id: events.id,
         title: events.title,
         description: events.description,
+        shortDescription: events.shortDescription,
         date: events.date,
+        endDate: events.endDate,
         location: events.location,
+        onlineUrl: events.onlineUrl,
         category: events.category,
+        tags: events.tags,
         maxParticipants: events.maxParticipants,
         currentParticipants: events.currentParticipants,
         organizerId: events.organizerId,
         status: events.status,
+        eventType: events.eventType,
         imageUrl: events.imageUrl,
+        bannerUrl: events.bannerUrl,
+        isPublic: events.isPublic,
+        requiresApproval: events.requiresApproval,
+        allowGuestList: events.allowGuestList,
+        timezone: events.timezone,
+        currency: events.currency,
+        organizerName: events.organizer,
+        organizerEmail: events.organizerEmail,
+        organizerPhone: events.organizerPhone,
+        website: events.website,
+        socialMedia: events.socialMedia,
+        customFields: events.customFields,
+        seoTitle: events.seoTitle,
+        seoDescription: events.seoDescription,
+        slug: events.slug,
+        publishedAt: events.publishedAt,
         createdAt: events.createdAt,
         updatedAt: events.updatedAt,
         organizer: {
@@ -53,85 +75,138 @@ export class EventsService {
       })
       .from(events)
       .leftJoin(users, eq(events.organizerId, users.id))
-      .where(eq(events.id, id))
-      .limit(1);
+      .where(eq(events.id, id));
 
-    if (!result[0]) {
+    if (!result.length) {
       throw new Error('Event not found');
     }
 
-    return result[0] as Event;
+    const eventData = result[0];
+
+    // Get ticket types for this event
+    const eventTicketTypes = await db
+      .select({
+        id: ticketTypes.id,
+        name: ticketTypes.name,
+        price: ticketTypes.price,
+        quantity: ticketTypes.quantity,
+        sold: ticketTypes.sold,
+        status: ticketTypes.status,
+      })
+      .from(ticketTypes)
+      .where(eq(ticketTypes.eventId, id))
+      .orderBy(ticketTypes.sortOrder, ticketTypes.createdAt);
+
+    return {
+      ...eventData,
+      ticketTypes: eventTicketTypes,
+    } as Event;
   }
 
   async getEvents(filters: EventFilters): Promise<EventsResponse> {
-    const { category, location, dateFrom, dateTo, search, page, limit } = filters;
+    const { page, limit, ...otherFilters } = filters;
     const offset = (page - 1) * limit;
 
     const conditions = [];
 
-    // Only show active events by default
-    conditions.push(eq(events.status, 'active'));
-
-    if (category) {
-      conditions.push(eq(events.category, category));
+    // Build where conditions
+    if (otherFilters.category) {
+      conditions.push(eq(events.category, otherFilters.category));
     }
 
-    if (location) {
-      conditions.push(like(events.location, `%${location}%`));
+    if (otherFilters.location) {
+      conditions.push(like(events.location, `%${otherFilters.location}%`));
     }
 
-    if (dateFrom) {
-      conditions.push(gte(events.date, new Date(dateFrom)));
+    if (otherFilters.dateFrom) {
+      conditions.push(gte(events.date, new Date(otherFilters.dateFrom)));
     }
 
-    if (dateTo) {
-      conditions.push(lte(events.date, new Date(dateTo)));
+    if (otherFilters.dateTo) {
+      conditions.push(lte(events.date, new Date(otherFilters.dateTo)));
     }
 
-    if (search) {
+    if (otherFilters.search) {
       conditions.push(
-        sql`(${events.title} ILIKE ${`%${search}%`} OR ${events.description} ILIKE ${`%${search}%`})`
+        sql`${events.title} ILIKE ${`%${otherFilters.search}%`} OR ${events.description} ILIKE ${`%${otherFilters.search}%`}`
       );
+    }
+
+    if (otherFilters.eventType) {
+      conditions.push(eq(events.eventType, otherFilters.eventType));
+    }
+
+    if (otherFilters.status) {
+      conditions.push(eq(events.status, otherFilters.status));
+    } else {
+      // By default, only show published and active events
+      conditions.push(sql`${events.status} IN ('published', 'active')`);
+    }
+
+    if (otherFilters.isPublic !== undefined) {
+      conditions.push(eq(events.isPublic, otherFilters.isPublic));
     }
 
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
-    const [eventsResult, countResult] = await Promise.all([
-      db
-        .select({
-          id: events.id,
-          title: events.title,
-          description: events.description,
-          date: events.date,
-          location: events.location,
-          category: events.category,
-          maxParticipants: events.maxParticipants,
-          currentParticipants: events.currentParticipants,
-          organizerId: events.organizerId,
-          status: events.status,
-          imageUrl: events.imageUrl,
-          createdAt: events.createdAt,
-          updatedAt: events.updatedAt,
-          organizer: {
-            id: users.id,
-            name: users.name,
-            email: users.email,
-            image: users.image,
-          },
-        })
-        .from(events)
-        .leftJoin(users, eq(events.organizerId, users.id))
-        .where(whereClause)
-        .orderBy(desc(events.date))
-        .limit(limit)
-        .offset(offset),
-      db
-        .select({ count: sql<number>`count(*)` })
-        .from(events)
-        .where(whereClause),
-    ]);
+    // Get total count
+    const [countResult] = await db
+      .select({ count: count() })
+      .from(events)
+      .where(whereClause);
 
-    const total = countResult[0]?.count || 0;
+    // Get paginated results
+    const eventsResult = await db
+      .select({
+        id: events.id,
+        title: events.title,
+        description: events.description,
+        shortDescription: events.shortDescription,
+        date: events.date,
+        endDate: events.endDate,
+        location: events.location,
+        onlineUrl: events.onlineUrl,
+        category: events.category,
+        tags: events.tags,
+        maxParticipants: events.maxParticipants,
+        currentParticipants: events.currentParticipants,
+        organizerId: events.organizerId,
+        status: events.status,
+        eventType: events.eventType,
+        imageUrl: events.imageUrl,
+        bannerUrl: events.bannerUrl,
+        isPublic: events.isPublic,
+        requiresApproval: events.requiresApproval,
+        allowGuestList: events.allowGuestList,
+        timezone: events.timezone,
+        currency: events.currency,
+        organizerName: events.organizer,
+        organizerEmail: events.organizerEmail,
+        organizerPhone: events.organizerPhone,
+        website: events.website,
+        socialMedia: events.socialMedia,
+        customFields: events.customFields,
+        seoTitle: events.seoTitle,
+        seoDescription: events.seoDescription,
+        slug: events.slug,
+        publishedAt: events.publishedAt,
+        createdAt: events.createdAt,
+        updatedAt: events.updatedAt,
+        organizer: {
+          id: users.id,
+          name: users.name,
+          email: users.email,
+          image: users.image,
+        },
+      })
+      .from(events)
+      .leftJoin(users, eq(events.organizerId, users.id))
+      .where(whereClause)
+      .orderBy(desc(events.createdAt))
+      .limit(limit)
+      .offset(offset);
+
+    const total = countResult.count;
     const totalPages = Math.ceil(total / limit);
 
     return {
@@ -143,22 +218,36 @@ export class EventsService {
   }
 
   async updateEvent(id: string, data: Partial<UpdateEventInput>): Promise<Event> {
-    const updateData: any = { ...data };
+    const updateData = { ...data };
     if (data.date) {
-      updateData.date = new Date(data.date);
+      updateData.date = new Date(data.date) as any;
     }
-    updateData.updatedAt = new Date();
+    if (data.endDate) {
+      updateData.endDate = new Date(data.endDate) as any;
+    }
+    updateData.updatedAt = new Date() as any;
 
-    await db
+    const [result] = await db
       .update(events)
       .set(updateData)
-      .where(eq(events.id, id));
+      .where(eq(events.id, id))
+      .returning();
+
+    if (!result) {
+      throw new Error('Event not found');
+    }
 
     return this.getEventById(id);
   }
 
   async deleteEvent(id: string): Promise<void> {
-    await db.delete(events).where(eq(events.id, id));
+    const result = await db
+      .delete(events)
+      .where(eq(events.id, id));
+
+    if (result.rowCount === 0) {
+      throw new Error('Event not found');
+    }
   }
 
   async getEventsByOrganizer(organizerId: string): Promise<Event[]> {
@@ -167,14 +256,35 @@ export class EventsService {
         id: events.id,
         title: events.title,
         description: events.description,
+        shortDescription: events.shortDescription,
         date: events.date,
+        endDate: events.endDate,
         location: events.location,
+        onlineUrl: events.onlineUrl,
         category: events.category,
+        tags: events.tags,
         maxParticipants: events.maxParticipants,
         currentParticipants: events.currentParticipants,
         organizerId: events.organizerId,
         status: events.status,
+        eventType: events.eventType,
         imageUrl: events.imageUrl,
+        bannerUrl: events.bannerUrl,
+        isPublic: events.isPublic,
+        requiresApproval: events.requiresApproval,
+        allowGuestList: events.allowGuestList,
+        timezone: events.timezone,
+        currency: events.currency,
+        organizerName: events.organizer,
+        organizerEmail: events.organizerEmail,
+        organizerPhone: events.organizerPhone,
+        website: events.website,
+        socialMedia: events.socialMedia,
+        customFields: events.customFields,
+        seoTitle: events.seoTitle,
+        seoDescription: events.seoDescription,
+        slug: events.slug,
+        publishedAt: events.publishedAt,
         createdAt: events.createdAt,
         updatedAt: events.updatedAt,
       })
@@ -185,32 +295,35 @@ export class EventsService {
     return result as Event[];
   }
 
-  // Participation request operations
+  // Participation Request methods (keeping existing functionality)
   async createParticipationRequest(
-    data: CreateParticipationRequestInput & { userId: string }
+    data: CreateParticipationRequestInput,
+    userId: string
   ): Promise<ParticipationRequest> {
     // Check if user already has a request for this event
-    const existing = await db
+    const [existing] = await db
       .select()
       .from(participationRequests)
       .where(
         and(
           eq(participationRequests.eventId, data.eventId),
-          eq(participationRequests.userId, data.userId)
+          eq(participationRequests.userId, userId)
         )
-      )
-      .limit(1);
+      );
 
-    if (existing.length > 0) {
+    if (existing) {
       throw new Error('You have already requested to participate in this event');
     }
 
-    const [request] = await db
+    const [result] = await db
       .insert(participationRequests)
-      .values(data)
+      .values({
+        ...data,
+        userId,
+      })
       .returning();
 
-    return this.getParticipationRequestById(request.id);
+    return this.getParticipationRequestById(result.id);
   }
 
   async getParticipationRequestById(id: string): Promise<ParticipationRequest> {
@@ -232,8 +345,7 @@ export class EventsService {
       })
       .from(participationRequests)
       .leftJoin(users, eq(participationRequests.userId, users.id))
-      .where(eq(participationRequests.id, id))
-      .limit(1);
+      .where(eq(participationRequests.id, id));
 
     if (!result[0]) {
       throw new Error('Participation request not found');
@@ -307,28 +419,31 @@ export class EventsService {
   ): Promise<ParticipationRequest> {
     const updateData = { ...data, updatedAt: new Date() };
 
-    await db
+    const [result] = await db
       .update(participationRequests)
       .set(updateData)
-      .where(eq(participationRequests.id, id));
+      .where(eq(participationRequests.id, id))
+      .returning();
 
-    // If accepting a request, increment current participants
+    if (!result) {
+      throw new Error('Participation request not found');
+    }
+
+    // Update event participant count if status changed to accepted/rejected
     if (data.status === 'accepted') {
-      const request = await this.getParticipationRequestById(id);
       await db
         .update(events)
         .set({
           currentParticipants: sql`${events.currentParticipants} + 1`,
-          updatedAt: new Date(),
         })
-        .where(eq(events.id, request.eventId));
+        .where(eq(events.id, result.eventId));
     }
 
     return this.getParticipationRequestById(id);
   }
 
   async getUserParticipationStatus(eventId: string, userId: string): Promise<ParticipationRequest | null> {
-    const result = await db
+    const [result] = await db
       .select()
       .from(participationRequests)
       .where(
@@ -336,9 +451,8 @@ export class EventsService {
           eq(participationRequests.eventId, eventId),
           eq(participationRequests.userId, userId)
         )
-      )
-      .limit(1);
+      );
 
-    return result[0] as ParticipationRequest || null;
+    return result as ParticipationRequest || null;
   }
 }
