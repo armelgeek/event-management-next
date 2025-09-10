@@ -42,6 +42,9 @@ export async function createEventUseCase(
     tags: data.tags ? JSON.stringify(data.tags) : null,
     socialMedia: data.socialMedia ? JSON.stringify(data.socialMedia) : null,
     status: 'draft' as const, // Start as draft, can be published later
+    organizerName: data.organizer || null, // Organization name if different from user
+    customFields: null, // No custom fields by default
+    publishedAt: null, // Will be set when published
   };
 
   // Create event and ticket types in a transaction
